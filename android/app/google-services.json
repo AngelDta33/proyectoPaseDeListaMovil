@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "746587896416",
+    "project_id": "asistencia-app-32c96",
+    "storage_bucket": "asistencia-app-32c96.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:746587896416:android:bea3636c0ff1149a172105",
+        "android_client_info": {
+          "package_name": "com.example.qr_escuela"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC6F49fF4WsnFNO5lTwOUDJxHdA-Me0rds"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
