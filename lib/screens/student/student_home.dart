@@ -11,6 +11,7 @@ import '../../services/notification_service.dart';
 import '../../widgets/connectivity_banner.dart';
 import 'student_attendance_screen.dart';
 import 'student_tasks_screen.dart';
+import 'study_mode_screen.dart';
 
 class StudentHome extends StatefulWidget {
   final UserModel user;
@@ -50,6 +51,7 @@ class _StudentHomeState extends State<StudentHome> {
             _HomeTab(user: widget.user),
             StudentAttendanceScreen(user: widget.user),
             StudentTasksScreen(user: widget.user),
+            const StudyModeScreen(),
           ],
         ),
         bottomNavigationBar: NavigationBar(
@@ -68,6 +70,10 @@ class _StudentHomeState extends State<StudentHome> {
                 icon: Icon(Icons.assignment_outlined),
                 selectedIcon: Icon(Icons.assignment),
                 label: 'Tareas'),
+            NavigationDestination(
+                icon: Icon(Icons.menu_book_outlined),
+                selectedIcon: Icon(Icons.menu_book),
+                label: 'Estudiar'),
           ],
         ),
       ),
