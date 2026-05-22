@@ -33,6 +33,41 @@ class TaskModel {
     this.grades = const {},
   });
 
+  // ── copyWith ──────────────────────────────────────────────────────────────
+  TaskModel copyWith({
+    String? id,
+    String? title,
+    String? description,
+    String? type,
+    String? scope,
+    String? subjectId,
+    String? subjectName,
+    String? teacherId,
+    String? schoolId,
+    String? studentId,
+    DateTime? assignedDate,
+    DateTime? dueDate,
+    List<String>? seenBy,
+    Map<String, String>? grades,
+  }) {
+    return TaskModel(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      type: type ?? this.type,
+      scope: scope ?? this.scope,
+      subjectId: subjectId ?? this.subjectId,
+      subjectName: subjectName ?? this.subjectName,
+      teacherId: teacherId ?? this.teacherId,
+      schoolId: schoolId ?? this.schoolId,
+      studentId: studentId ?? this.studentId,
+      assignedDate: assignedDate ?? this.assignedDate,
+      dueDate: dueDate ?? this.dueDate,
+      seenBy: seenBy ?? this.seenBy,
+      grades: grades ?? this.grades,
+    );
+  }
+
   factory TaskModel.fromMap(Map<String, dynamic> map, String id) {
     return TaskModel(
       id: id,
