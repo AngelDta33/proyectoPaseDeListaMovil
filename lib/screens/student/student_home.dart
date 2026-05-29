@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/user_model.dart';
 import '../../models/student_model.dart';
 import '../../models/subject_model.dart';
+import '../../models/task_model.dart';
 import '../../models/attendance_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/student_service.dart';
 import '../../services/subject_service.dart';
 import '../../services/attendance_service.dart';
+import '../../services/task_service.dart';
 import '../../services/notification_service.dart';
 import '../../widgets/connectivity_banner.dart';
 import 'student_attendance_screen.dart';
@@ -24,21 +27,56 @@ class StudentHome extends StatefulWidget {
 class _StudentHomeState extends State<StudentHome> {
   int _tab = 0;
 
+  // Badge: tareas no vistas
+  int _unseenTaskCount = 0;
+  StudentModel? _cachedStudent;
+  StreamSubscription<List<SubjectModel>>? _subSub;
+
   @override
   void initState() {
     super.initState();
     _initNotifications();
+    _initBadge();
+  }
+
+  @override
+  void dispose() {
+    _subSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _initNotifications() async {
-    final uid = widget.user.uid;
-    final studentId = widget.user.studentId;
-    // Guardar token FCM del usuario actual
-    await NotificationService.saveToken(uid);
-    // Verificar y mostrar notificaciones pendientes si es alumno
-    if (studentId != null && studentId.isNotEmpty) {
-      await NotificationService.checkPendingNotifications(studentId);
+    await NotificationService.saveToken(widget.user.uid);
+    final sid = widget.user.studentId;
+    if (sid != null && sid.isNotEmpty) {
+      await NotificationService.checkPendingNotifications(sid);
     }
+  }
+
+  /// Carga el perfil del alumno y suscribe conteo de tareas no vistas.
+  Future<void> _initBadge() async {
+    try {
+      final sid = widget.user.studentId;
+      final student = (sid != null && sid.isNotEmpty)
+          ? await StudentService().getStudentById(sid)
+          : await StudentService().getStudentByAuthUid(widget.user.uid);
+
+      if (student == null || !mounted) return;
+      _cachedStudent = student;
+
+      _subSub = SubjectService()
+          .getSubjectsByStudentId(student.id)
+          .listen((subjects) async {
+        if (!mounted) return;
+        final subjectIds = subjects.map((s) => s.id).toList();
+        final tasks = await TaskService()
+            .getTasksForStudent(student.id, subjectIds);
+        if (!mounted) return;
+        final unseen =
+            tasks.where((t) => !t.seenBy.contains(student.id)).length;
+        setState(() => _unseenTaskCount = unseen);
+      });
+    } catch (_) {}
   }
 
   @override
@@ -56,21 +94,35 @@ class _StudentHomeState extends State<StudentHome> {
         ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _tab,
-          onDestinationSelected: (i) => setState(() => _tab = i),
-          destinations: const [
-            NavigationDestination(
+          onDestinationSelected: (i) {
+            // Al entrar a Tareas, limpiar badge localmente
+            if (i == 2) setState(() => _unseenTaskCount = 0);
+            setState(() => _tab = i);
+          },
+          destinations: [
+            const NavigationDestination(
                 icon: Icon(Icons.home_outlined),
                 selectedIcon: Icon(Icons.home),
                 label: 'Inicio'),
-            NavigationDestination(
+            const NavigationDestination(
                 icon: Icon(Icons.calendar_today_outlined),
                 selectedIcon: Icon(Icons.calendar_today),
                 label: 'Asistencias'),
+            // Badge en el tab de Tareas
             NavigationDestination(
-                icon: Icon(Icons.assignment_outlined),
-                selectedIcon: Icon(Icons.assignment),
-                label: 'Tareas'),
-            NavigationDestination(
+              icon: Badge(
+                isLabelVisible: _unseenTaskCount > 0,
+                label: Text('$_unseenTaskCount'),
+                child: const Icon(Icons.assignment_outlined),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _unseenTaskCount > 0,
+                label: Text('$_unseenTaskCount'),
+                child: const Icon(Icons.assignment),
+              ),
+              label: 'Tareas',
+            ),
+            const NavigationDestination(
                 icon: Icon(Icons.menu_book_outlined),
                 selectedIcon: Icon(Icons.menu_book),
                 label: 'Estudiar'),
@@ -80,6 +132,8 @@ class _StudentHomeState extends State<StudentHome> {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _HomeTab extends StatefulWidget {
   final UserModel user;
@@ -117,20 +171,19 @@ class _HomeTabState extends State<_HomeTab> {
       ),
       body: FutureBuilder<StudentModel?>(
         future: _studentFuture,
-        builder: (context, studentSnap) {
-          if (studentSnap.connectionState == ConnectionState.waiting) {
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (studentSnap.hasError) {
+          if (snap.hasError) {
             return Center(
-              child: Text('Error: ${studentSnap.error}',
-                  style: const TextStyle(color: Colors.red)));
+                child: Text('Error: ${snap.error}',
+                    style: const TextStyle(color: Colors.red)));
           }
-          final student = studentSnap.data;
+          final student = snap.data;
           if (student == null) {
             return const Center(
-                child: Text(
-                    'No se encontró tu perfil.\nContacta a tu maestro.',
+                child: Text('No se encontró tu perfil.\nContacta a tu maestro.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey)));
           }
@@ -141,19 +194,77 @@ class _HomeTabState extends State<_HomeTab> {
   }
 }
 
-class _StudentDashboard extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StudentDashboard extends StatefulWidget {
   final UserModel user;
   final StudentModel student;
   const _StudentDashboard({required this.user, required this.student});
 
   @override
+  State<_StudentDashboard> createState() => _StudentDashboardState();
+}
+
+class _StudentDashboardState extends State<_StudentDashboard> {
+  int _pendingTaskCount = 0;
+  bool _tasksLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPendingTasks();
+  }
+
+  Future<void> _loadPendingTasks() async {
+    try {
+      final subjects = await SubjectService()
+          .getSubjectsByStudentId(widget.student.id)
+          .first;
+      final ids = subjects.map((s) => s.id).toList();
+      final tasks =
+      await TaskService().getTasksForStudent(widget.student.id, ids);
+
+      final pending = tasks
+          .where((t) =>
+      (t.type == 'tarea' || t.type == 'examen') &&
+          !t.grades.containsKey(widget.student.id))
+          .length;
+
+      if (!mounted) return;
+      setState(() {
+        _pendingTaskCount = pending;
+        _tasksLoaded = true;
+      });
+
+      // Snackbar de felicitación si todas están calificadas
+      if (tasks.isNotEmpty && pending == 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Row(children: [
+                Text('🎉  '),
+                Expanded(child: Text('¡Estás al día con todas tus tareas!')),
+              ]),
+              backgroundColor: Color(0xFF2E7D32),
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        });
+      }
+    } catch (_) {}
+  }
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<SubjectModel>>(
-      stream: SubjectService().getSubjectsByStudentId(student.id),
+      stream: SubjectService().getSubjectsByStudentId(widget.student.id),
       builder: (context, subSnap) {
         final subjects = subSnap.data ?? [];
         return FutureBuilder<List<AttendanceModel>>(
-          future: AttendanceService().getAttendanceByStudent(student.id),
+          future:
+          AttendanceService().getAttendanceByStudent(widget.student.id),
           builder: (context, attSnap) {
             final records = attSnap.data ?? [];
             final totalPresent = records.where((r) => r.present).length;
@@ -178,7 +289,7 @@ class _StudentDashboard extends StatelessWidget {
                           radius: 28,
                           backgroundColor: Colors.white24,
                           child: Text(
-                            student.name[0].toUpperCase(),
+                            widget.student.name[0].toUpperCase(),
                             style: const TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
@@ -190,17 +301,18 @@ class _StudentDashboard extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Hola, ${student.name.split(' ').first}',
+                              Text(
+                                  'Hola, ${widget.student.name.split(' ').first}',
                                   style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 20,
                                       fontWeight: FontWeight.bold)),
                               Text(
-                                  'Semestre/Grupo: ${student.semesterGroup}',
+                                  'Semestre/Grupo: ${widget.student.semesterGroup}',
                                   style: const TextStyle(
                                       color: Colors.white70, fontSize: 13)),
-                              if (student.career != null)
-                                Text(student.career!,
+                              if (widget.student.career != null)
+                                Text(widget.student.career!,
                                     style: const TextStyle(
                                         color: Colors.white70, fontSize: 12)),
                             ],
@@ -211,7 +323,14 @@ class _StudentDashboard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                // Stats globales
+
+                // Banner tareas pendientes
+                if (_tasksLoaded) ...[
+                  _PendingTasksBanner(count: _pendingTaskCount),
+                  const SizedBox(height: 16),
+                ],
+
+                // Stats
                 Row(
                   children: [
                     _StatCard(
@@ -233,11 +352,12 @@ class _StudentDashboard extends StatelessWidget {
                         color: pct >= 80
                             ? const Color(0xFF2E7D32)
                             : pct >= 60
-                                ? Colors.orange
-                                : Colors.red),
+                            ? Colors.orange
+                            : Colors.red),
                   ],
                 ),
                 const SizedBox(height: 20),
+
                 // Materias
                 const Text('Mis Materias',
                     style: TextStyle(
@@ -255,7 +375,7 @@ class _StudentDashboard extends StatelessWidget {
                 else
                   ...subjects.map((s) {
                     final subRecords =
-                        records.where((r) => r.subjectId == s.id).toList();
+                    records.where((r) => r.subjectId == s.id).toList();
                     final subPresent =
                         subRecords.where((r) => r.present).length;
                     final subPct = subRecords.isEmpty
@@ -269,7 +389,8 @@ class _StudentDashboard extends StatelessWidget {
                         leading: Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF2E7D32).withOpacity(0.1),
+                            color:
+                            const Color(0xFF2E7D32).withOpacity(0.1),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Icon(Icons.book_outlined,
@@ -292,6 +413,50 @@ class _StudentDashboard extends StatelessWidget {
   }
 }
 
+// ─── Widgets auxiliares ───────────────────────────────────────────────────────
+
+class _PendingTasksBanner extends StatelessWidget {
+  final int count;
+  const _PendingTasksBanner({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final allDone = count == 0;
+    final color =
+    allDone ? const Color(0xFF2E7D32) : const Color(0xFF6A1B9A);
+    final icon = allDone
+        ? Icons.check_circle_outline
+        : Icons.assignment_late_outlined;
+    final label = allDone
+        ? '¡Sin tareas pendientes por calificar!'
+        : count == 1
+        ? '1 tarea pendiente de calificación'
+        : '$count tareas pendientes de calificación';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatCard extends StatelessWidget {
   final String label;
   final String value;
@@ -299,18 +464,19 @@ class _StatCard extends StatelessWidget {
   final Color color;
   const _StatCard(
       {required this.label,
-      required this.value,
-      required this.icon,
-      required this.color});
+        required this.value,
+        required this.icon,
+        required this.color});
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
       child: Card(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12)),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+          padding:
+          const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
           child: Column(
             children: [
               Icon(icon, color: color, size: 28),
@@ -341,8 +507,8 @@ class _AttendancePill extends StatelessWidget {
     final color = pct >= 80
         ? const Color(0xFF2E7D32)
         : pct >= 60
-            ? Colors.orange
-            : Colors.red;
+        ? Colors.orange
+        : Colors.red;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
